@@ -80,3 +80,79 @@
     timestamp: uint,
   }
 )
+
+;; Brand Management Functions
+
+;; Register a new brand in the marketplace
+(define-public (register-brand (name (string-ascii 50)))
+  (let ((brand-data {
+      name: name,
+      verified: false,
+      created-at: stacks-block-height,
+    }))
+    (ok (map-set Brands tx-sender brand-data))
+  )
+)
+
+;; Verify a brand (owner only function)
+(define-public (verify-brand (brand principal))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (is-some (map-get? Brands brand)) err-not-brand-owner)
+    (let ((brand-data (unwrap! (map-get? Brands brand) err-not-brand-owner)))
+      (ok (map-set Brands brand (merge brand-data { verified: true })))
+    )
+  )
+)
+
+;; Direct Sale Functions
+
+;; List a new product for direct sale
+(define-public (list-product
+    (name (string-ascii 100))
+    (description (string-ascii 500))
+    (price uint)
+  )
+  (let (
+      (brand (unwrap! (map-get? Brands tx-sender) err-not-brand-owner))
+      (product-id (+ (var-get product-counter) u1))
+    )
+    (asserts! (> price u0) err-invalid-price)
+    (asserts! (> (len name) u0) err-invalid-price)
+    (asserts! (> (len description) u0) err-invalid-price)
+    (var-set product-counter product-id)
+    (ok (map-set Products product-id {
+      brand: tx-sender,
+      name: name,
+      description: description,
+      price: price,
+      available: true,
+      created-at: stacks-block-height,
+      is-auction: false,
+    }))
+  )
+)
+
+;; Purchase a product (direct sale)
+(define-public (purchase-product (product-id uint))
+  (let (
+      (product (unwrap! (map-get? Products product-id) err-listing-not-found))
+      (price (get price product))
+      (brand (get brand product))
+      (fee (/ (* price (var-get platform-fee)) u1000))
+    )
+    (if (and
+        (get available product)
+        (not (get is-auction product))
+        (>= (stx-get-balance tx-sender) price)
+      )
+      (begin
+        (try! (stx-transfer? fee tx-sender contract-owner))
+        (try! (stx-transfer? (- price fee) tx-sender brand))
+        (map-set Products product-id (merge product { available: false }))
+        (ok true)
+      )
+      err-insufficient-funds
+    )
+  )
+)
